@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "smart": false,
+  "timeoutMs": 120000,
+  "reviewDeny": false,
+  "writable": [],
+  "readOnly": [
+    "/absolute/home/.agents/skills",
+    "/absolute/home/.pi/agent/skills",
+    "/absolute/project/security"
+  ],
+  "skillPaths": [],
+  "rules": [
+    {
+      "tool": "bash",
+      "action": "ALWAYS_DENY"
+    },
+    {
+      "tool": "read",
+      "path": "/absolute/project/private",
+      "action": "ALWAYS_ASK"
+    }
+  ],
+  "trustedAgents": [],
+  "analysis": {
+    "enabled": false,
+    "maxCalls": 0,
+    "maxInputChars": 4000,
+    "timeoutMs": 10000
+  },
+  "decisionModel": {
+    "enabled": false,
+    "maxCalls": 0,
+    "maxInputChars": 4000,
+    "timeoutMs": 10000
+  }
+}

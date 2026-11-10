@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "smart": true,
+  "timeoutMs": 120000,
+  "reviewDeny": false,
+  "writable": [],
+  "readOnly": [],
+  "skillPaths": [],
+  "rules": [],
+  "trustedAgents": [],
+  "analysis": {
+    "enabled": false,
+    "maxCalls": 10,
+    "maxInputChars": 4000,
+    "timeoutMs": 10000
+  },
+  "decisionModel": {
+    "enabled": false,
+    "maxCalls": 10,
+    "maxInputChars": 4000,
+    "timeoutMs": 10000
+  }
+}

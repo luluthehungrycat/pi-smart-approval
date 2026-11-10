@@ -1,0 +1,10 @@
+{
+  "name": "pi-smart-approval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fail-closed advisory approval and soft filesystem protection for Pi 1.5.1",
+  "engines": { "node": ">=22.19" },
+  "pi": { "extensions": ["./src/index.ts"] },
+  "scripts": { "test": "node --experimental-strip-types --test tests/*.test.ts" }
+}
