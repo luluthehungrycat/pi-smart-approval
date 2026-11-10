@@ -1,0 +1,634 @@
+Project: Smart Approval & Filesystem Protection Extension for Pi Agent
+
+You are Pi Agent. Your task is to design, implement, test, and document a production-quality Pi extension that introduces intelligent tool-call approval, risk-aware policy enforcement, and configurable soft filesystem write protection.
+
+Pi's normal execution model is comparatively permissive ("YOLO mode"). The goal is to provide a configurable, ergonomic security and approval system comparable to — and potentially more flexible than — the approval systems of Codex CLI, Claude Code, Hermes Agent, and Mistral Vibe CLI.
+
+Do not merely produce a design document. Implement a working extension in the current development environment, subject to the safety constraints below.
+
+0. Mandatory investigation before implementation
+
+First, inspect the locally installed Pi Agent version, extension API, tool-call lifecycle, permission hooks, TUI capabilities, configuration mechanisms, model/provider interfaces, and relevant documentation/source code.
+
+Determine:
+
+- Which hooks can intercept tool calls before execution, and whether they can block or modify them.
+- Whether hooks cover built-in tools, custom extension tools, delegated agents, and subprocesses.
+- Whether extension-defined tools can bypass approval hooks.
+- How to persist configuration and approval decisions.
+- How to implement interactive approval dialogs and TUI settings.
+- How to invoke the current model for auxiliary analysis without interfering with the main agent's conversation.
+- How to select a dedicated analysis model/provider.
+- How to support headless, noninteractive, and CI environments.
+- Whether an extension can reliably intercept modifications to Pi's own configuration and extension files.
+- Whether Pi already provides reusable approval, permission, or sandbox functionality.
+
+Consult upstream Pi documentation and source code as necessary. Do not invent APIs.
+
+Inspect compatibility with Pi's existing extension ecosystem and avoid unnecessarily modifying Pi core.
+
+Prefer a self-contained extension with modular internal components. If a requirement is impossible using public extension APIs, explain the limitation, implement the safest feasible alternative, and propose a narrowly scoped upstream change.
+
+Before coding, briefly present your findings and intended architecture, then proceed unless a genuinely consequential user decision is necessary.
+
+1. Overall architecture
+
+Implement a layered policy engine with these conceptual components:
+
+1. Tool-call interception and canonicalization.
+2. Deterministic rule engine.
+3. Filesystem access policy engine.
+4. Risk classification and smart decision engine.
+5. Optional LLM analysis.
+6. Optional specialized decision-model analysis.
+7. Interactive approval and timeout management.
+8. Session-scoped and persistent policy overrides.
+9. Audit logging and policy diagnostics.
+10. TUI settings and configuration interface.
+
+Use the following decision classes:
+
+- SMART_ALLOW: Tool call is considered sufficiently safe and proceeds automatically.
+- SMART_ASK: Tool call requires human approval.
+- SMART_DENY: Tool call is considered potentially dangerous and is denied by default, with an optional manual-approval mechanism.
+- HARD_DENY: Tool call is categorically prohibited unless the explicit hard-deny override mechanism has been activated.
+
+Also support deterministic manual rules:
+
+- ALWAYS_ALLOW
+- ALWAYS_ASK
+- ALWAYS_DENY
+
+Manual rules override SMART_ALLOW, SMART_ASK, and SMART_DENY, but never HARD_DENY unless the hard-deny override is explicitly activated.
+
+Security invariants must take precedence over ordinary approval rules.
+
+Use a documented, deterministic precedence model. A suggested order is:
+
+1. Unoverrideable technical enforcement failures: fail closed.
+2. HARD_DENY, unless the explicitly enabled hard-deny override applies.
+3. Mandatory manual-approval requirements for protected Pi configuration.
+4. Explicit user-defined manual rules.
+5. Filesystem scope and access policies.
+6. Session-scoped approvals.
+7. Deterministic smart classification.
+8. Optional LLM/decision-model classification.
+9. Safe fallback decision.
+
+Filesystem scope restrictions must not be silently bypassed by a broad tool-level ALWAYS_ALLOW rule. Explicit path-level authorization or a clearly documented, deliberate override is required.
+
+2. Deterministic risk classification
+
+Create an extensible rules engine that recognizes operations such as:
+
+- Read-only file inspection.
+- Project-local file modifications.
+- Global skills and agent-definition maintenance.
+- Git status, diff, log, and other read-only operations.
+- Git commits and local branch operations.
+- Git reset, clean, checkout, restore, and destructive history changes.
+- Git push, especially force pushes.
+- File deletion and recursive deletion.
+- Filesystem permission and ownership changes.
+- Package installation and execution of package-manager scripts.
+- Network downloads and execution of downloaded scripts.
+- Commands invoking interpreters or shells.
+- Modification of credentials, secrets, authentication configuration, or security policies.
+- Access to sensitive directories.
+- Modification of Pi configuration and extensions.
+- Commands affecting processes, services, containers, virtual machines, and host configuration.
+- Commands that can modify remote systems.
+- Tool calls that can leak secrets or transmit sensitive files.
+
+Classify based on actual arguments and effects, not simply tool names.
+
+For example, "git status" should generally be automatically allowed, whereas "git reset --hard" requires a substantially different risk assessment.
+
+Account for shell composition, pipelines, redirection, command substitution, quoting, nested interpreters, symlinks, path traversal, environment expansion, and indirect side effects.
+
+Never assume that a command is safe simply because its first executable is on an allowlist.
+
+Where static analysis cannot reliably establish behavior, escalate to SMART_ASK or SMART_DENY rather than guessing.
+
+Distinguish accidental/destructive operations from malicious or categorically unacceptable operations. Define HARD_DENY conservatively, with clear, explainable criteria.
+
+3. Smart approval behavior
+
+SMART_ALLOW
+
+Automatically execute sufficiently safe operations without unnecessary prompts.
+
+Examples may include read-only project inspection, ordinary source-code edits inside authorized writable directories, and low-risk development operations.
+
+Avoid needless friction during normal coding workflows.
+
+An approval decision should authorize a specific operation, not grant broad trust to the tool that performs it. 
+
+SMART_ASK
+
+Prompt the user with:
+
+- Tool name and normalized operation.
+- A concise description of the intended effect.
+- Affected files, directories, or external systems.
+- Risk explanation.
+- Whether the operation exceeds normal writable scope.
+- Relevant model-based analysis, if performed.
+
+Provide these actions:
+
+- Allow once.
+- Allow for the remainder of the session.
+- Always allow matching operations.
+- Deny.
+
+Persistent approval must be scoped to a sufficiently specific operation pattern, tool, path, and relevant arguments. Never silently convert approval of one command into approval of arbitrary shell commands.
+
+SMART_DENY
+
+Deny potentially dangerous operations by default.
+
+Optionally, the user may enable manual review of SMART_DENY operations.
+
+When enabled, offer:
+
+- Allow once.
+- Allow for the remainder of the session.
+- Deny.
+
+Never offer persistent "Always allow" for SMART_DENY approvals.
+
+If the user wants a permanent exception, require a separate, deliberate manual policy configuration action with appropriate warnings.
+
+HARD_DENY
+
+Block categorically prohibited operations.
+
+A normal approval prompt must not override HARD_DENY.
+
+Provide an explicit opt-in override mechanism through:
+
+- A dedicated environment variable accepting a boolean true value.
+- A dedicated Pi CLI flag, if supported.
+- A TUI setting.
+
+The exact names may be chosen during implementation, but document them.
+
+When enabling this override interactively, show a prominent warning describing the risks and require affirmative acknowledgment of responsibility.
+
+For environment-variable and CLI activation, print an equivalent warning before execution and require a suitable explicit acknowledgment mechanism where technically possible.
+
+Never silently enable the override.
+
+Do not persist the override merely because it was enabled for one session.
+
+The override disables the HARD_DENY veto; it must not automatically authorize the underlying tool call. Other applicable rules and approval requirements continue to apply.
+
+If the Pi extension API cannot add a native CLI flag, implement and document the closest reliable alternative without pretending the native flag exists.
+
+4. Soft filesystem write protection
+
+Implement a configurable default writable-scope policy.
+
+Default writable locations
+
+The current working directory (CWD), recursively, is writable by default.
+
+Everything outside the authorized writable locations is read-only by default.
+
+Allow users to add additional writable directories and files, both temporarily and persistently.
+
+Global skills directories
+
+Treat the following as candidate default writable global skills directories, subject to verification of Pi's actual discovery behavior:
+
+- "~/.agents/skills/"
+- "~/.pi/agent/skills/"
+- "~/.claude/skills/"
+- "~/.config/opencode/skills/"
+
+Investigate which directories Pi actually discovers, whether additional paths are supported, and their precedence.
+
+Provide configuration for:
+
+- Enabling/disabling write access per global skills directory.
+- Adding custom skills directories.
+- Configuring discovery and precedence of same-name skills.
+- Distinguishing skills discovery precedence from filesystem write authorization.
+
+If skill discovery precedence cannot be changed through an extension, document the limitation and implement only supported behavior.
+
+Global agent-definition directories
+
+Also treat these as candidate default writable directories for custom agent definitions:
+
+- "~/.agents/agents/"
+- "~/.claude/agents/"
+- "~/.config/opencode/agents/"
+
+Verify the formats and discovery mechanisms actually supported.
+
+Allow per-directory write protection and additional custom paths.
+
+Filesystem security considerations
+
+Correctly handle:
+
+- Canonical and relative paths.
+- Symlinks and symlink traversal.
+- Hard links where relevant.
+- Parent-directory traversal.
+- Nonexistent paths and their existing ancestors.
+- Atomic writes and rename operations.
+- Temporary files created outside CWD.
+- Subprocesses and indirect writes.
+- Race conditions between approval and execution.
+
+Do not claim that interception-based write protection is equivalent to OS-enforced filesystem isolation.
+
+Investigate optional integration with bubblewrap, Gondolin, hardened containers, or microVM backends to provide stronger enforcement.
+
+If enforcement is only best-effort, state exactly which operations can bypass it.
+
+5. Special protection for Pi configuration
+
+Every modification to global or project-level Pi configuration must require manual approval.
+
+This includes relevant configuration files, extension configuration, model/provider settings, and other security-sensitive Pi configuration locations.
+
+Such operations may be:
+
+- Manually approved.
+- SMART_DENIED.
+- HARD_DENIED.
+
+They must never be SMART_ALLOWED.
+
+No general ALWAYS_ALLOW rule, inherited custom-agent permission, session allowlist, or LLM decision may bypass this requirement.
+
+Treat approval as specific to the proposed modification.
+
+Configuration changes must be revalidated immediately before execution.
+
+Prevent the extension from silently modifying its own policy configuration to weaken enforcement.
+
+For automated configuration migrations, request explicit manual authorization before applying changes.
+
+If a protected configuration change is impossible to intercept reliably, fail closed where feasible and document the remaining gap.
+
+6. Custom-agent permissions and frontmatter
+
+Investigate Markdown-based custom agent definitions, particularly:
+
+- "~/.agents/agents/"
+- "~/.claude/agents/"
+- "~/.config/opencode/agents/"
+
+Support translating recognizable permission declarations from YAML frontmatter into Pi-compatible policy rules.
+
+Do not blindly trust frontmatter permissions.
+
+By default, treat them as untrusted metadata or advisory policy suggestions.
+
+Only apply them as manual approval overrides when the user explicitly trusts the relevant custom agent definition or source.
+
+Trust should be:
+
+- Explicit.
+- Revocable.
+- Scoped to a specific agent definition.
+- Invalidated or reconsidered when security-relevant content changes.
+- Visible in the TUI.
+
+A trusted agent's permissions remain subordinate to HARD_DENY and mandatory Pi-configuration approval requirements.
+
+Prevent an untrusted agent from granting itself broader privileges through its Markdown definition.
+
+7. Optional LLM-based smart analysis
+
+Use a separate auxiliary analysis call when deterministic rules cannot confidently classify a tool call.
+
+By default, use the same provider and model currently selected by the invoking Pi agent or subagent.
+
+Allow configuring a dedicated analysis provider/model.
+
+The analysis must not contaminate the main agent's conversation or expose unnecessary private context.
+
+Pass only the minimum relevant information needed for classification.
+
+Require structured output containing:
+
+- Proposed decision.
+- Risk category.
+- Concise reasoning.
+- Confidence or uncertainty.
+- Affected resources.
+- Relevant policy observations.
+
+Validate the model output against a strict schema.
+
+Treat the analysis as advisory, not authoritative.
+
+LLM recommendations must never override HARD_DENY, protected configuration requirements, or other deterministic security invariants.
+
+Cost optimization
+
+Minimize token usage and subscription/API cost.
+
+Use deterministic rules first.
+
+Only invoke an LLM when it can meaningfully improve the decision.
+
+Implement, where practical:
+
+- Caching of equivalent safe decisions.
+- Risk-aware escalation thresholds.
+- Small, focused classification prompts.
+- Structured responses with limited output tokens.
+- Configurable analysis budgets.
+- Per-session cost/token tracking.
+- Reuse of safe classifications where context permits.
+- Avoidance of redundant analysis for identical calls.
+- Optional cheaper dedicated analysis models.
+
+Never sacrifice a required security check merely to save tokens.
+
+Cache keys must account for security-relevant context, including tool arguments, paths, working directory, policy version, trust state, and other relevant environmental conditions.
+
+Invalidate cached decisions when their assumptions change.
+
+8. Optional specialized decision-model analysis
+
+Support an additional, entirely optional decision-model layer.
+
+Potential models or families to investigate include:
+
+- Jev.
+- Clef.
+- LiquidAI/d1.
+- Other System 1-style decision models.
+
+Do not assume these names correspond to available or compatible models. Verify their identities, provider availability, interfaces, output formats, and suitability.
+
+The user must explicitly configure a provider and model before this feature is enabled.
+
+Possible workflows:
+
+1. Deterministic classification only.
+2. Deterministic classification + LLM analysis.
+3. Deterministic classification + decision model.
+4. Deterministic classification + decision model, escalating to an LLM only when needed.
+
+Avoid automatically invoking both models for every tool call.
+
+Evaluate whether decision models offer meaningful latency or cost advantages for this task.
+
+Do not grant decision-model outputs authority over deterministic hard constraints.
+
+Requesty testing
+
+You may investigate and test compatible decision models through the Requesty API.
+
+The API key is available via the "REQUESTY_API_KEY" environment variable, configured in the user's ".bashrc".
+
+Do not print, log, commit, or transmit the key anywhere except the intended authenticated API request.
+
+Do not dump ".bashrc" contents.
+
+Load the environment safely if necessary, without executing unrelated shell initialization commands blindly.
+
+Use modest token budgets for exploratory tests and report approximate usage and costs.
+
+Do not perform unnecessary repeated paid evaluations.
+
+If Requesty does not provide the relevant model, report that rather than inventing compatibility.
+
+9. Approval timeouts and deferred approvals
+
+Interactive approval prompts should time out after 120 seconds by default.
+
+Allow users to change the timeout in configuration and TUI settings.
+
+On timeout:
+
+1. Return a preliminary DENY decision to the waiting tool call.
+2. Let the agent continue and potentially choose a safer alternative.
+3. Store the original request as a pending approval.
+4. Make the request discoverable through "/pending-approvals".
+
+A timed-out approval is not permission to execute anything later automatically.
+
+The pending-approvals interface should support:
+
+- Listing outstanding approvals.
+- Inspecting operation details.
+- Approving or rejecting them.
+- Removing stale requests.
+- Showing the originating session and context.
+- Indicating whether the original operation has already been superseded.
+
+Important: Approving a pending request must not silently replay an obsolete tool call.
+
+Design a safe continuation mechanism: either notify the originating agent to reconsider/reissue the operation or require explicit user confirmation of replay after fresh policy validation.
+
+Use persistent storage if feasible, so pending approvals survive restarts.
+
+Avoid leaking secrets into stored tool arguments or logs.
+
+10. Headless and unattended execution
+
+Detect noninteractive execution reliably.
+
+Examples include CI jobs, unattended CLI sessions, and automated subagents.
+
+In noninteractive mode:
+
+- SMART_ALLOW proceeds.
+- SMART_ASK automatically denies.
+- SMART_DENY automatically denies.
+- HARD_DENY remains blocked unless explicitly overridden and otherwise authorized.
+- Mandatory manual approvals cannot be bypassed.
+
+Do not wait 120 seconds for input that cannot arrive.
+
+Return useful, machine-readable denial information so agents can adapt their approach.
+
+Do not let a missing TUI silently enable permissive execution.
+
+Distinguish genuinely unattended sessions from interactive sessions that temporarily lack focus.
+
+11. TUI and configuration UX
+
+Provide a convenient TUI interface for:
+
+- Enabling/disabling smart approval mode.
+- Viewing the current enforcement status.
+- Editing manual allow/ask/deny rules.
+- Managing writable filesystem paths.
+- Managing global skills and agent-definition paths.
+- Configuring trusted custom agents.
+- Selecting the analysis model/provider.
+- Enabling optional decision-model analysis.
+- Setting analysis budgets.
+- Configuring approval timeouts.
+- Enabling manual review of SMART_DENY.
+- Reviewing pending approvals.
+- Viewing recent decisions and explanations.
+- Activating/deactivating the hard-deny override with a clear warning.
+
+Provide discoverable commands, including:
+
+"/pending-approvals"
+
+Choose sensible names for other commands, avoiding collisions with existing Pi commands.
+
+Persist configuration using a documented, versioned schema.
+
+Use safe atomic writes for configuration updates.
+
+Provide clear distinction between global settings, project settings, and session overrides.
+
+Project-local configuration must not be able to silently weaken globally enforced security rules.
+
+12. Testing requirements — critical safety restriction
+
+DO NOT TEST SMART_DENY OR HARD_DENY WITH REAL DESTRUCTIVE OR DANGEROUS TOOL CALLS IN THIS SESSION UNLESS EXECUTION IS ISOLATED INSIDE A VERIFIED bubblewrap, Gondolin, microVM, or appropriately hardened container backend.
+
+This is mandatory.
+
+Without verified isolation:
+
+- Use mocked tool calls.
+- Use synthetic inputs.
+- Use dry-run policy evaluation.
+- Use unit tests against inert fixtures.
+- Test the policy engine without executing dangerous commands.
+
+Do not run destructive commands merely to prove that the approval system blocks them.
+
+Do not assume a container is sufficiently isolated just because it exists.
+
+Verify the isolation boundary before any potentially dangerous integration test.
+
+Even inside isolation, avoid real credentials, production repositories, host-mounted sensitive directories, and external destructive operations.
+
+Implement tests covering:
+
+- Normal safe operations.
+- Ambiguous operations.
+- Dangerous and destructive operations.
+- HARD_DENY precedence.
+- Manual override precedence.
+- Protected Pi configuration.
+- Writable path boundaries.
+- Symlink and traversal attacks.
+- Shell command composition.
+- Custom-agent trust handling.
+- Approval timeout behavior.
+- Pending approval persistence.
+- Headless execution.
+- Model failures, malformed outputs, and timeouts.
+- Cost-budget exhaustion.
+- Cache invalidation.
+- Extension lifecycle and restart behavior.
+
+Use adversarial test cases to identify bypasses.
+
+Do not execute adversarial payloads against the real host.
+
+13. Reliability and security
+
+Adopt fail-closed behavior for operations that require approval when the policy engine is unavailable.
+
+Prevent recursive approval loops caused by the extension's own model calls, persistence, logging, or UI operations.
+
+Handle concurrent tool calls safely.
+
+Avoid TOCTOU vulnerabilities where possible.
+
+Sanitize logs and protect credentials.
+
+Treat tool outputs, repository content, agent definitions, and LLM analysis as untrusted input.
+
+Protect against prompt injection that attempts to persuade the approval model to grant permissions.
+
+Provide meaningful error messages rather than silently failing.
+
+Avoid making the extension so restrictive that ordinary Pi development becomes unusable.
+
+14. Deliverables
+
+Produce:
+
+1. A functional, installable Pi extension.
+2. Modular, maintainable source code.
+3. Automated unit and integration tests.
+4. A documented configuration schema with examples.
+5. TUI controls and approval dialogs.
+6. "/pending-approvals" support.
+7. Documentation explaining the policy precedence model.
+8. Documentation explaining the soft filesystem enforcement boundary.
+9. Optional LLM and decision-model configuration.
+10. A concise security threat model.
+11. A compatibility and limitations report.
+12. A final implementation and test summary.
+
+Include a README with installation, usage, configuration, and troubleshooting instructions.
+
+Where appropriate, provide an example minimal configuration and an example stricter configuration.
+
+15. Development process
+
+Work incrementally:
+
+Phase A — Investigation
+
+Inspect Pi APIs, relevant source code, existing extension patterns, and feasibility.
+
+Phase B — Core security engine
+
+Implement deterministic policies, approval decisions, filesystem scopes, protected configuration, and basic interception.
+
+Phase C — Interactive approval
+
+Implement TUI prompts, timeout handling, session/persistent overrides, and pending approvals.
+
+Phase D — Intelligent classification
+
+Add optional LLM analysis, decision-model adapters, caching, and budget controls.
+
+Phase E — Agent/skills integration
+
+Implement global path configuration, custom-agent trust, and compatible frontmatter translation.
+
+Phase F — Hardening
+
+Add adversarial tests, documentation, audit logging, and explicit limitation reporting.
+
+At each phase, run appropriate safe tests and fix regressions.
+
+Do not sacrifice enforcement correctness for convenience or feature completeness.
+
+If the Pi extension API imposes a fundamental security limitation, surface it clearly rather than disguising it with an unreliable workaround.
+
+16. Final acceptance criteria
+
+The extension is successful when:
+
+- Safe routine development actions remain fast and largely frictionless.
+- Ambiguous operations receive meaningful, understandable approval prompts.
+- Potentially destructive operations are denied unless appropriately authorized.
+- HARD_DENY cannot be bypassed by ordinary rules or LLM recommendations.
+- Pi configuration changes always require manual approval.
+- Filesystem write policies are consistently enforced within the documented interception boundary.
+- Trusted and untrusted custom agents have appropriately different permission treatment.
+- Unattended sessions fail closed for operations requiring human approval.
+- Approval timeouts do not permanently block agent progress.
+- Pending approvals can be reviewed without unsafe automatic replay.
+- Auxiliary model usage is optional, efficient, measurable, and cost-conscious.
+- The extension works without requiring a fork of Pi core wherever technically feasible.
+- All remaining security limitations are documented explicitly.
+
+Start by inspecting the actual Pi installation and extension API. Then implement the system, not just a proposal.
+
+Prioritize a trustworthy, functional security foundation over an impressive-looking but bypassable approval interface.
