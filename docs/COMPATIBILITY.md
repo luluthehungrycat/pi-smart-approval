@@ -2,7 +2,7 @@
 
 ## Evidence inspected locally
 
-Installed package: `@earendil-works/pi-coding-agent` **1.5.1**, Node **22.23.2**. Installation inspected under `/home/hermes/.pi/agent/install/releases/1.5.1/node_modules/`. No Pi core modifications.
+Initial API investigation used `@earendil-works/pi-coding-agent` **1.5.1**, Node **22.23.2**. Live end-to-end verification has since run against installed Pi **1.6.0**. No Pi core modifications.
 
 Read installed README; extension, model, skills, security and containerization docs; extension examples (`permission-gate`, `protected-paths`, `timed-confirm`, `structured-output`, `jev-router`, subagent agent discovery); and relevant compiled source/types:
 
@@ -23,11 +23,11 @@ Read installed README; extension, model, skills, security and containerization d
 | Modify arguments | Supported in place, with no subsequent validation; this is a remaining bypass if a later trusted extension mutates input |
 | Subprocess/remote enforcement | No per-syscall interception; parent tool approval does not govern child/remote effects |
 | User `!` / `!!` | `user_bash` can return an inert error result, but an earlier handler can consume it |
-| Dialogs | `ctx.ui.select/confirm/input/editor`; AbortSignal closes expiry dialogs; local TUI only here |
+| Dialogs | Tool approval uses blocking `ctx.ui.select()` in TUI and RPC (`ctx.mode === 'rpc'`, `ctx.hasUI`); Pi transports RPC selection through `extension_ui_request`/`extension_ui_response`. Dialog timeout is passed to the client. `PI_SMART_APPROVAL_RPC_DIALOGS=false` disables RPC dialogs. Nonempty `CI`, print, and JSON modes deny approval-required calls. Administration commands remain local-TUI-only. Approval intentionally avoids `ctx.ui.confirm`; stock T3 may auto-answer repeated identical confirms after an “accept for session” choice. |
 | Persistence | Pi offers session `appendEntry`; this implementation instead uses private per-record JSON for cross-session pending/audit and a versioned atomic policy file |
 | Auxiliary model | Separate registry `complete`/`classify` calls, no main-conversation mutation; providers are trusted and can run configured credential commands |
 | CLI flags | `registerFlag/getFlag` genuinely supported in 1.5.1; implemented two explicit boolean flags |
-| CI/RPC | `ctx.mode` and `hasUI`; conservative local-TUI-only approval, nonempty CI disables it |
+| CI/RPC | `ctx.mode` and `hasUI`; interactive tool approval supports TUI and RPC, with nonempty CI disabling both |
 | Protected config | Structured file effects checked; opaque effects require fresh blanket review; internals/startup/privileged extensions cannot be reliably intercepted |
 | Existing approvals/sandbox | Example permission gates are regex demonstrations, not comprehensive enforcement. Project trust controls resource loading, not execution. Gondolin/container options exist but are not automatically enabled here |
 
@@ -53,14 +53,22 @@ LiquidAI/d1 availability/interface/suitability was **not verified** and no d1-sp
 
 ## Verification boundary
 
-`npm test` runs dependency-free policy/controller/storage/model-mock tests. An optional integration test imports the **actual installed Pi loader**, loads `src/index.ts`, confirms command/flag registration, and invokes lifecycle handlers using mocked contexts and a temporary `PI_CODING_AGENT_DIR`. It verifies headless/nested-call-event denials, `user_bash` interception, expiry storage, restart, and corrupt-policy fail-closed behavior without executing tools.
+`npm test` runs unit tests and mocked lifecycle checks. The lifecycle check auto-detects an installed `pi-coding-agent` package by read-only lookups (a `pi` on PATH linked into the package, Pi's managed installer, common global npm prefixes) and skips when none is found; `PI_SMART_APPROVAL_TEST_PI_ROOT` overrides detection and fails the test if it does not point at a valid package.
 
-This verifies loadability and handler behavior, not a real interactive terminal session, paid-provider compatibility, remote sandbox semantics, or complete filesystem containment. Static TypeScript checking has not been performed; the installed loader transpilation and Node strip-types test execution are verified. No destructive integration runs were attempted because isolation was not verified.
+`npm run e2e:rpc` runs a real `pi --mode rpc` process with a temporary `PI_CODING_AGENT_DIR`, an in-process scripted OpenAI-compatible model on `127.0.0.1`, and inert `touch` markers to demonstrate whether a tool ran. Its replies mimic T3 Code's adapter. Setting `T3_BRIDGE` to the path of T3's `pi-t3-mcp-extension.ts` also loads the real bridge extension.
+
+`npm run e2e:tui` runs the real Pi TUI in a pseudo-terminal and drives the approval interaction with arrow/enter keystrokes. Both live harnesses were run against Pi **1.6.0**.
+
+Live verification did **not** include a stock T3 Code Full access thread with a human answering in T3's UI: the extension is not installed in the host Pi. T3 behavior was checked against its shipped adapter and bridge extension source, plus protocol emulation. Stock T3 launches Pi with `--mode rpc` and injects its bridge extension. In Full access (`T3_PI_RUNTIME_MODE=full-access`), the bridge does not prompt, leaving this extension's select as the sole prompt; T3 renders it as a single-select user-input question and returns the answer string. In approval-required/auto modes, the bridge confirm appears as a second prompt. Use Full access with this extension to avoid that double prompt. A reply not among the offered option strings is rejected as `INVALID_APPROVAL_REPLY`.
+
+Approval outcomes include `INVALID_APPROVAL_REPLY` for unknown answers, `APPROVAL_CANCELLED` for cancellation before expiry, `APPROVAL_TIMEOUT` for no answer by deadline (metadata-only pending record; late replies are ignored), `APPROVAL_UI_FAILURE` for UI errors, `ABORTED` for cancellation by the caller, and `REVALIDATION_FAILED` if policy/path/shell environment changes during review. Persistent confirmation can return `PERSIST_CANCELLED` or `PERSIST_CONFIRMATION_TIMEOUT`. Audit records include `code`; successful examples include `AUTHORIZED`, `AUTHORIZED_ONCE`, `AUTHORIZED_SESSION`, `AUTHORIZED_SESSION_GRANT`, `AUTHORIZED_PERSISTENT`, and `AUTHORIZED_MODEL_ASSIST`.
+
+These harnesses establish extension behavior at the tested Pi 1.6.0 interfaces; they do not establish complete OS containment, paid-provider compatibility, or stock T3 human UI acceptance. Pi `shellCommandPrefix` settings and other extensions' bash spawn hooks are invisible to this extension. Approval is advisory interception, not sandboxing, and time-of-check/time-of-use races remain as described in [SECURITY.md](../SECURITY.md).
 
 ## Intentional restrictions / incomplete acceptance items
 
-- Shell, grep/find/ls and arbitrary custom tools are opaque, fresh-review-only. Fine-grained safe shell parsing and validated read-only command adapters are not implemented. This increases friction but avoids unsupported safety claims.
-- Models advise the human; model-driven automatic authorization is not implemented. Deterministic structured file operations remain fast.
+- Complex shell commands and arbitrary custom tools remain opaque and fresh-review-only. Literal shell parsing supports a narrow deterministic read-only tier and a restricted grep/find model tier; it is not a sandbox or proof against indirect effects.
+- Models advise the human except for the explicitly enabled, confidence-gated `shellModelAssist` path within that restricted shell model tier.
 - Advanced settings use a validated JSON editor, not dedicated rule/model/budget widgets. There is no configurable dollar-exact cost ceiling or paid-model benchmark.
 - Pending review stores only metadata; full original arguments and automatic supersession detection are unavailable. Review never grants future permission; reissue is explicit.
 - Active-agent context is manual; no automatic cross-agent permission propagation. Full Claude/OpenCode permission dialect compatibility is not claimed.

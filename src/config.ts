@@ -21,8 +21,9 @@ export function validateRule(v: unknown): asserts v is Rule {
   if (v.action === 'ALWAYS_ALLOW' && !v.key) throw new Error('Allow rules require exact operation keys');
 }
 export function validateConfig(v: unknown): Config {
-  object(v); keys(v, Object.keys(defaults()));
+  object(v); keys(v, [...Object.keys(defaults()), 'shellModelAssist']);
   if (v.version !== 1 || typeof v.smart !== 'boolean' || typeof v.reviewDeny !== 'boolean') throw new Error('Unsupported/invalid configuration');
+  if (v.shellModelAssist !== undefined && typeof v.shellModelAssist !== 'boolean') throw new Error('Invalid shellModelAssist');
   integer(v.timeoutMs, 10, 3600000);
   for (const k of ['writable', 'readOnly', 'skillPaths']) paths(v[k]);
   if (!Array.isArray(v.rules)) throw new Error('Invalid rules'); v.rules.forEach(validateRule);
