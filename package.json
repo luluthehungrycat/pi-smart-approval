@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Fail-closed advisory approval and soft filesystem protection for Pi 1.5.1",
+  "description": "Fail-closed advisory approval and soft filesystem protection for Pi (verified with 1.6.0)",
   "engines": { "node": ">=22.19" },
   "pi": { "extensions": ["./src/index.ts"] },
-  "scripts": { "test": "node --experimental-strip-types --test tests/*.test.ts" }
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "e2e:rpc": "node tests/e2e/rpc-e2e.mjs",
+    "e2e:tui": "python3 -I tests/e2e/tui-e2e.py"
+  }
 }

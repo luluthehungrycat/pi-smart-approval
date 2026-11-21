@@ -21,23 +21,23 @@ function setup(t: any) {
 test('headless denies every interactive requirement without waiting', async t => {
   const { env, config, port, call } = setup(t); port.interactive = false; const a = new Approver();
   assert.equal((await a.decide(call, env, () => config, false, port)).allowed, true);
-  for (const c of [{ tool: 'bash', input: { command: 'pwd' } }, { tool: 'write', input: { path: '.pi/settings.json', content: '{}' } }]) assert.equal((await a.decide(c, env, () => config, true, port)).code, 'INTERACTIVE_REQUIRED');
+  for (const c of [{ tool: 'bash', input: { command: 'npm test' } }, { tool: 'write', input: { path: '.pi/settings.json', content: '{}' } }]) assert.equal((await a.decide(c, env, () => config, true, port)).code, 'INTERACTIVE_REQUIRED');
 });
 test('approval timeout denies and records only metadata, never arguments', async t => {
   const { env, config, port, records } = setup(t); config.timeoutMs = 10;
   port.select = async () => new Promise(() => {});
-  const result = await new Approver().decide({ tool: 'bash', input: { command: 'echo synthetic-secret' } }, env, () => config, false, port);
+  const result = await new Approver().decide({ tool: 'bash', input: { command: 'npm run synthetic-secret' } }, env, () => config, false, port);
   assert.equal(result.code, 'APPROVAL_TIMEOUT'); assert.equal(records.length, 1); assert.ok(!JSON.stringify(records).includes('synthetic-secret'));
 });
 test('late approval cannot authorize the timed-out call', async t => {
   const { env, config, port } = setup(t); config.timeoutMs = 10; let resolve!: (s: string) => void;
   port.select = () => new Promise(r => { resolve = r; });
-  const result = await new Approver().decide({ tool: 'bash', input: { command: 'pwd' } }, env, () => config, false, port);
+  const result = await new Approver().decide({ tool: 'bash', input: { command: 'npm test' } }, env, () => config, false, port);
   resolve('Allow once'); assert.equal(result.allowed, false);
 });
 test('protected and opaque operations never offer reusable grants', async t => {
   const { env, config, port } = setup(t); const a = new Approver();
-  const calls = [{ tool: 'write', input: { path: '.pi/settings.json', content: '{}' } }, { tool: 'bash', input: { command: 'pwd' } }, { tool: 'custom', input: {} }];
+  const calls = [{ tool: 'write', input: { path: '.pi/settings.json', content: '{}' } }, { tool: 'bash', input: { command: 'ls | wc -l' } }, { tool: 'custom', input: {} }];
   port.select = async (_title, actions) => { assert.deepEqual(actions, ['Allow once', 'Deny']); return 'Allow once'; };
   for (const call of calls) for (let i = 0; i < 2; i++) assert.equal((await a.decide(call, env, () => config, false, port)).allowed, true);
 });
@@ -76,10 +76,13 @@ test('SMART_DENY review excludes persistent permission; hard veto excludes all p
   assert.equal((await a.decide(call, env, () => config, false, port)).allowed, true);
   assert.equal((await a.decide({ tool: 'bash', input: { command: 'rm -rf /' } }, env, () => config, false, port)).code, 'HARD_DENY');
 });
-test('always allow updates policy but requires reissue; restart clears session grants', async t => {
+test('always allow needs explicit save confirmation, persists exact rule key, then authorizes; restart clears session grants', async t => {
   const { env, config, port, call } = setup(t); config.smart = false; let saved = false;
-  port.select = async () => 'Always allow exact operation'; port.persist = async () => { saved = true; };
-  assert.equal((await new Approver().decide(call, env, () => config, false, port)).code, 'POLICY_UPDATED_REISSUE'); assert.equal(saved, true);
+  port.select = async (_t, actions) => actions.includes('Always allow exact operation') ? 'Always allow exact operation' : 'Save permanent exact rule';
+  port.persist = async (tool, key) => { saved = true; config.rules.push({ tool, key, action: 'ALWAYS_ALLOW' }); };
+  const persisted = await new Approver().decide(call, env, () => config, false, port);
+  assert.equal(persisted.code, 'AUTHORIZED_PERSISTENT'); assert.equal(persisted.allowed, true); assert.equal(saved, true);
+  config.rules = [];
   port.select = async () => 'Allow for session'; await new Approver().decide(call, env, () => config, false, port);
   port.interactive = false; assert.equal((await new Approver().decide(call, env, () => config, false, port)).allowed, false);
 });
@@ -104,10 +107,10 @@ test('agent trust is explicit, content-bound, revocable; tools metadata cannot g
 });
 test('aborted calls and UI errors fail closed without pending automatic replay', async t => {
   const { env, config, port, records } = setup(t); const abort = new AbortController(); abort.abort(); port.signal = abort.signal;
-  assert.equal((await new Approver().decide({ tool: 'bash', input: { command: 'pwd' } }, env, () => config, false, port)).code, 'ABORTED');
+  assert.equal((await new Approver().decide({ tool: 'bash', input: { command: 'npm test' } }, env, () => config, false, port)).code, 'ABORTED');
   assert.equal(records.length, 0);
   port.signal = undefined; port.select = async () => { throw new Error('Mock UI unavailable'); };
-  assert.equal((await new Approver().decide({ tool: 'bash', input: { command: 'pwd' } }, env, () => config, false, port)).code, 'APPROVAL_UI_FAILURE');
+  assert.equal((await new Approver().decide({ tool: 'bash', input: { command: 'npm test' } }, env, () => config, false, port)).code, 'APPROVAL_UI_FAILURE');
   assert.equal(records.length, 0);
 });
 test('decision-model typed probabilities, dedicated selection, and malformed results', async t => {

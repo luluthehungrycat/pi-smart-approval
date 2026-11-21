@@ -1,6 +1,6 @@
 # Pi Smart Approval
 
-A dependency-free TypeScript extension for **Pi 1.5.1 on Linux / Node ≥22.19**. Provides deterministic tool approval, soft filesystem write scopes, timed dialogs, pending-request review, explicit agent trust, and optional advisory models. No Pi core changes.
+A dependency-free TypeScript extension for **Pi on Linux / Node ≥22.19**. Live verification has run on Pi 1.6.0; see the compatibility verification boundary for its exact scope. Provides deterministic tool approval, soft filesystem write scopes, timed dialogs, pending-request review, explicit agent trust, and optional advisory models. No Pi core changes.
 
 **This is an advisory interception layer, NOT a sandbox or a complete security boundary.** It cannot constrain an approved subprocess, a hostile extension, a remote agent, or changes made after its hook returns. Read [SECURITY.md](SECURITY.md) before relying on it. This is an initial security foundation, not an independently audited security product.
 
@@ -22,9 +22,9 @@ Loading during a running session requires Pi's supported reload mechanism; simpl
 - Built-in `write`/`edit`: ordinary files under CWD are writable; outside writes ask.
 - Verified global skills directories `~/.agents/skills` and `${getAgentDir()}/skills` are additional default writable roots. Discovery and write permission are independent.
 - Protected Pi state and this extension's source always require fresh manual approval for mutations.
-- **Every shell command and unknown/custom tool asks at least once per invocation**, regardless of ordinary allow/session rules. Even `git status` may invoke a configured filesystem monitor; shell startup files and subprocess effects are not statically provable. Known destructive/remote operations default to deny.
+- Shell classification uses a conservative literal-only tokenizer. A small read-only command set can be automatically allowed within the workspace; eligible `grep`/`find` calls still require human review unless explicitly enabled model assistance returns a very high-confidence allow. Other simple, non-vetoed commands may offer exact session or persistent grants. Complex syntax, vetoed commands, unsafe inherited shell environments, and commands with unsafe paths remain opaque and receive fresh one-time review only. These decisions are advisory; approved shell commands are not sandboxed.
 - `SMART_DENY` is blocked unless `reviewDeny` is enabled. `HARD_DENY` is a separate veto for narrowly recognized host-volume destruction signatures.
-- Only local TUI sessions with `hasUI` and no nonempty `CI` variable can approve. RPC/print/JSON/CI never wait for approval and deny calls needing human input.
+- Approval dialogs work in Pi's native TUI and RPC mode when the client can answer extension UI requests. Set `PI_SMART_APPROVAL_RPC_DIALOGS=false` to disable RPC dialogs; print/JSON modes and any nonempty `CI` deny calls needing human input. Policy administration commands remain local-TUI-only.
 - `smart: false` disables automatic smart allows, **not enforcement**. There is no general YOLO switch.
 
 ## Commands
@@ -48,9 +48,9 @@ Show decision, effect/risk, canonical resources, outside-scope status, an exact 
 
 - Allow once / Deny.
 - Session approval for reusable, fully modeled operations.
-- Always allow the **exact tool+arguments+CWD digest**, only for eligible non-deny operations within authorized scope.
+- Always allow an **exact operation** only for eligible non-deny operations within authorized scope; shell rules additionally bind the inherited shell-environment digest.
 
-Protected configuration, outside-scope writes, opaque tools, and explicit `ALWAYS_ASK` never receive reusable approval options. SMART_DENY never offers persistence. Creating an always-allow rule requires a **second protected-policy confirmation**, denies the original request with `POLICY_UPDATED_REISSUE`, and requires the agent to reissue it. It does not silently execute an operation after changing policy.
+Protected configuration, outside-scope writes, opaque tools, and explicit `ALWAYS_ASK` never receive reusable approval options. SMART_DENY never offers persistence. Creating an always-allow rule requires a **second explicit confirmation** showing its rule key and scope; after saving, the call is re-evaluated and runs only if that exact saved rule authorizes it. A policy-file change during review rejects the save.
 
 ### `/pending-approvals`
 
@@ -76,13 +76,13 @@ PI_SMART_APPROVAL_ACKNOWLEDGE_RISK=true \
 pi -e /absolute/path/to/pi-smart-approval/src/index.ts
 ```
 
-Pi 1.5.1 supports extension flags; equivalent flags are `--smart-approval-hard-override --smart-approval-acknowledge-risk`. A warning is printed to stderr outside TUI; interactive activation additionally confirms responsibility. These only disable the hard veto: the operation becomes SMART_DENY and still needs deny-review enabled and fresh authorization. Headless runs cannot authorize it. Override is never written to policy. Environment/CLI flags explicitly request activation again on reload; TUI-only override is discarded.
+Pi's supported extension flag API provides `--smart-approval-hard-override --smart-approval-acknowledge-risk`. A warning is printed to stderr outside TUI; interactive activation additionally confirms responsibility. These only disable the hard veto: the operation becomes SMART_DENY and still needs deny-review enabled and fresh authorization. Headless runs cannot authorize it. Override is never written to policy. Environment/CLI flags explicitly request activation again on reload; TUI-only override is discarded.
 
 ### Optional models
 
 Disabled by default. `analysis.enabled: true` uses the invoking session's current model; configure both `provider` and `model` to select a dedicated one. `decisionModel.enabled` requires an explicit provider/model pair referring to a Pi **classifier** model. Decision model runs first; only low-confidence/unavailable answers escalate to the optional LLM.
 
-Calls use supported `ctx.modelRegistry.complete()` / `classify()` APIs with separate context. No conversation messages, raw arguments, paths, or source contents are sent: only tool category, deterministic reason, scope status and resource count. This deliberately sacrifices classification precision for privacy. Output is strictly validated and **display-only**: it cannot promote an ambiguous operation to automatic execution or override deterministic requirements. Failures leave the deterministic approval requirement unchanged.
+Calls use supported `ctx.modelRegistry.complete()` / `classify()` APIs with separate context. No conversation messages, raw arguments, operands, patterns, paths, or source contents are sent. Shell model input includes the eligible program, validated flag words, tier, and workspace-scope boolean, together with sanitized tool category, deterministic reason, opacity/outside-scope status, and resource count. This deliberately sacrifices classification precision for privacy. Output is strictly validated and cannot override deterministic vetoes. Only the explicit `shellModelAssist` option can let a sufficiently confident model allow an eligible shell model-tier call; otherwise advice is display-only. Failures leave the human approval requirement unchanged.
 
 Per-layer call budgets, bounded inputs, 256 output-token LLM limits, timeouts, and an in-memory safe-advice cache constrain usage. `/smart-approval` shows calls, returned tokens, provider-reported catalog cost, and failures. No dollar-accurate spending cap or guaranteed classifier token cap is claimed. Unreported costs/aborted requests may still be billable. No paid calls were made during development.
 
@@ -113,14 +113,14 @@ npm test
 PI_SMART_APPROVAL_TEST_PI_ROOT=/absolute/path/to/node_modules/@earendil-works/pi-coding-agent npm test
 ```
 
-Tests execute no destructive payloads and no paid model requests. Shell attacks are strings evaluated by pure functions; filesystem tests use inert temporary fixtures only. Integration tests load the actual installed extension loader and invoke handlers with mocked contexts; they do not execute approved tools or constitute end-to-end TUI/OS isolation validation.
+Tests execute no destructive payloads and no paid model requests. Shell attacks are strings evaluated by pure functions; filesystem tests use inert temporary fixtures only. `npm run e2e:rpc` and `npm run e2e:tui` exercise real Pi RPC/TUI processes using inert markers and scripted local model responses; see [the verification boundary](docs/COMPATIBILITY.md#verification-boundary) for scope and limitations.
 
 ## Troubleshooting
 
-- **Too many shell prompts:** expected. Use structured file tools; use OS isolation for less restrictive subprocess workflows. Do not replace the opaque-effects guard with a command-name allowlist.
+- **Too many shell prompts:** commands outside the narrow deterministic routine list remain reviewable or opaque. Use structured file tools or OS isolation for less restrictive subprocess workflows. Do not replace the opaque-effects guard with a command-name allowlist.
 - **`SECURITY_ENGINE_FAILURE`:** check schema/version, private storage permissions, changed agent files, and diagnostic command. No raw exceptions/arguments are logged.
 - **`REVALIDATION_FAILED`:** file, symlink, policy, trust, or session state changed during review. Reconsider and reissue.
-- **No prompt:** RPC/CI/headless is denied rather than waiting; a `CI` value of `"false"` still counts as CI. Unset it only when genuinely interactive.
+- **No RPC prompt:** check that the client supports extension UI requests and that `PI_SMART_APPROVAL_RPC_DIALOGS` is not `false`; any nonempty `CI` still disables dialogs, including `CI=false`. Calls needing approval then deny rather than wait.
 - **Global skills stay read-only:** check `readOnly`; removing a path from `writable` does not disable built-in default roots. Add a read-only exclusion instead.
 - **Changed skill discovery list:** use Pi `/reload`. Filesystem authorization changes apply on the next call; resource discovery changes require reload.
 

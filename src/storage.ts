@@ -41,7 +41,7 @@ export class Store {
     }).sort((a, b) => b.created - a.created);
   }
   remove(id: string) { unlinkSync(join(this.root, 'pending', this.id(id) + '.json')); }
-  audit(record: { key: string; tool: string; decision: string; reason: string; allowed: boolean }) {
+  audit(record: { key: string; tool: string; decision: string; reason: string; allowed: boolean; code?: string }) {
     // No raw arguments, contents, paths, model text, or credentials on disk.
     atomicJSON(join(this.root, 'audit', Date.now() + '-' + randomUUID() + '.json'), { ...record, time: Date.now() });
     const names = readdirSync(join(this.root, 'audit')).filter(n => /^\d+-[a-f0-9-]{36}\.json$/.test(n)).sort();

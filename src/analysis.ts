@@ -29,7 +29,9 @@ export class Analyzer {
     catch { this.failures++; return; }
     if (!model) return;
     // Do not send raw arguments, file contents, file paths, cwd, or agent definitions to providers.
-    const state = { tool: /^[a-z_]{1,40}$/.test(tool) ? tool : 'custom', reason: e.reason, opaque: e.opaque, outside: e.outside, resourceCount: e.resources.length };
+    // Shell: only the allowlisted program name and validated flag words; never operands, patterns or paths.
+    const shell = e.shell?.tier ? { program: e.shell.program, flags: e.shell.flags, tier: e.shell.tier, operandsInsideWorkspace: true } : undefined;
+    const state = { tool: /^[a-z_]{1,40}$/.test(tool) ? tool : 'custom', reason: e.reason, opaque: e.opaque, outside: e.outside, resourceCount: e.resources.length, ...(shell ? { shell } : {}) };
     const key = hash(stable([e.key, e.fingerprint, model.provider, model.id, kind, c]));
     const cached = this.cache.get(key); if (cached) return cached;
     if (this.calls[kind] >= c.maxCalls) return;

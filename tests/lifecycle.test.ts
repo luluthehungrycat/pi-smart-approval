@@ -27,8 +27,20 @@ test('installed Pi loader + mocked lifecycle integration (no tool execution, mod
   assert.equal(await emit('tool_call', { toolName: 'read', toolCallId: '1', input: { path: 'README.md' } }), undefined);
   const blocked = await emit('tool_call', { toolName: 'write', toolCallId: '2', input: { path: '.pi/settings.json', content: '{}' } });
   assert.equal(blocked.block, true); assert.equal(JSON.parse(blocked.reason).code, 'INTERACTIVE_REQUIRED'); assert.equal(prompts, 0);
-  const nested = await emit('tool_call', { toolName: 'bash', toolCallId: 'parent/1', parentToolCallId: 'parent', input: { command: 'pwd' } }); assert.equal(nested.block, true);
-  const user = await emit('user_bash', { command: 'pwd', cwd }); assert.equal(user.result.exitCode, 1);
+  const nested = await emit('tool_call', { toolName: 'bash', toolCallId: 'parent/1', parentToolCallId: 'parent', input: { command: 'npm test' } }); assert.equal(nested.block, true);
+  const user = await emit('user_bash', { command: 'npm test', cwd }); assert.equal(user.result.exitCode, 1);
+  // Deterministic routine shell is allowed without a prompt, even headless.
+  assert.equal(await emit('tool_call', { toolName: 'bash', toolCallId: '3', input: { command: 'pwd' } }), undefined); assert.equal(prompts, 0);
+  // RPC clients (e.g. T3 Code) get tool dialogs; policy administration commands stay TUI-only.
+  ctx.mode = 'rpc'; ctx.hasUI = true; const seen: any[] = [];
+  ctx.ui.select = async (title: string, options: string[], opts: any) => { prompts++; seen.push({ title, options, timeout: opts?.timeout }); return 'Allow for session'; };
+  assert.equal(await emit('tool_call', { toolName: 'bash', toolCallId: '4', input: { command: 'npm test' } }), undefined);
+  assert.equal(await emit('tool_call', { toolName: 'bash', toolCallId: '5', input: { command: 'npm test' } }), undefined);
+  assert.equal(prompts, 1); assert.deepEqual(seen[0].options, ['Allow once', 'Allow for session', 'Always allow exact operation', 'Deny']); assert.equal(seen[0].timeout, 120000);
+  ctx.ui.select = async () => { prompts++; return 'Deny'; };
+  const altered = await emit('tool_call', { toolName: 'bash', toolCallId: '6', input: { command: 'npm test -- --watch=false' } });
+  assert.equal(JSON.parse(altered.reason).code, 'USER_DENIED'); assert.equal(prompts, 2);
+  await extension.commands.get('smart-approval').handler('', ctx); assert.equal(prompts, 2);
   const policy = join(root, 'agent/smart-approval/config.json');
   const c = defaults(); c.smart = false; c.timeoutMs = 10; atomicJSON(policy, c);
   ctx.mode = 'tui'; ctx.hasUI = true; ctx.ui.select = async () => new Promise(() => {});

@@ -23,7 +23,7 @@ export default function smartApproval(pi: ExtensionAPI) {
   let generation = 0;
   const stateRoot = join(getAgentDir(), 'smart-approval');
   const configPath = join(stateRoot, 'config.json');
-  const env = (ctx: ExtensionContext): Environment => ({ cwd: ctx.cwd, home: homedir(), agentDir: getAgentDir(), configDir: CONFIG_DIR_NAME, extensionDir: resolve(dirname(fileURLToPath(import.meta.url)), '..') });
+  const env = (ctx: ExtensionContext): Environment => ({ cwd: ctx.cwd, home: homedir(), agentDir: getAgentDir(), configDir: CONFIG_DIR_NAME, extensionDir: resolve(dirname(fileURLToPath(import.meta.url)), '..'), shellEnv: process.env });
   function config(ctx: ExtensionContext): Config {
     const global = loadConfig(configPath);
     // Only the two verified Pi discovery locations receive default global write access.
@@ -36,7 +36,21 @@ export default function smartApproval(pi: ExtensionAPI) {
     }
     return effective;
   }
+  // Policy administration (settings, trust, hard override, pending review) stays local-TUI only.
   const interactive = (ctx: ExtensionContext) => ctx.mode === 'tui' && ctx.hasUI && !process.env.CI;
+  // Tool approval dialogs also work over Pi RPC (e.g. stock T3 Code), where ctx.ui.select becomes an
+  // extension_ui_request answered by the client. Clients that cannot answer simply time out and deny.
+  const toolDialogs = (ctx: ExtensionContext) => ctx.hasUI && !process.env.CI && (ctx.mode === 'tui' || (ctx.mode === 'rpc' && process.env.PI_SMART_APPROVAL_RPC_DIALOGS !== 'false'));
+  // Exact-operation grant chosen inside an approval dialog. The approver already obtained a separate
+  // explicit confirmation showing the scope. Refuse if the global policy changed since evaluation.
+  async function persistGrant(ctx: ExtensionContext, tool: string, key: string, snapshot: string) {
+    if (!toolDialogs(ctx)) throw new Error('Approval dialog required');
+    const previous = loadConfig(configPath);
+    if (stable(previous) !== snapshot) throw new Error('Policy changed during review; start again');
+    const c = structuredClone(previous);
+    if (!c.rules.some(r => r.tool === tool && r.key === key && r.action === 'ALWAYS_ALLOW')) c.rules.push({ tool, key, action: 'ALWAYS_ALLOW' });
+    atomicJSON(configPath, validateConfig(c));
+  }
   async function save(ctx: ExtensionContext, value: Config, previous: Config) {
     if (!interactive(ctx)) throw new Error('Manual TUI approval required');
     const validated = validateConfig(value);
@@ -64,18 +78,19 @@ export default function smartApproval(pi: ExtensionAPI) {
     try {
       if (startupError || !store || process.platform !== 'linux') throw new Error('Unavailable security engine');
       const currentGeneration = generation;
+      const snapshot = stable(loadConfig(configPath));
       const result = await approver.decide(call, env(ctx), () => config(ctx), hardOverride, {
-        interactive: interactive(ctx), session: ctx.sessionManager.getSessionId(), signal: ctx.signal,
-        select: (title, actions, signal) => ctx.ui.select(title, actions, { signal }),
+        interactive: toolDialogs(ctx), session: ctx.sessionManager.getSessionId(), signal: ctx.signal,
+        select: (title, actions, signal, timeout) => ctx.ui.select(title, actions, { signal, timeout }),
         pending: r => store!.pending(r),
-        persist: async (tool, key) => { const previous = loadConfig(configPath); const c = structuredClone(previous); c.rules.push({ tool, key, action: 'ALWAYS_ALLOW' }); await save(ctx, c, previous); },
+        persist: (tool, key) => persistGrant(ctx, tool, key, snapshot),
         advice: async (e, c) => {
           const d = await analyzer.analyze(call.tool, e, c.decisionModel, ctx, true);
           return d && d.confidence >= 0.9 ? d : (await analyzer.analyze(call.tool, e, c.analysis, ctx)) ?? d;
         },
       });
       if (currentGeneration !== generation || startupError || !store) throw new Error('Stale approval');
-      store.audit({ key: result.evaluation.key, tool: /^[a-z_]{1,40}$/.test(call.tool) ? call.tool : 'custom', decision: result.evaluation.decision, reason: result.evaluation.reason, allowed: result.allowed });
+      store.audit({ key: result.evaluation.key, tool: /^[a-z_]{1,40}$/.test(call.tool) ? call.tool : 'custom', decision: result.evaluation.decision, reason: result.evaluation.reason, allowed: result.allowed, code: result.code });
       if (!result.allowed) return { block: true as const, reason: JSON.stringify({ extension: 'smart-approval', code: result.code, decision: result.evaluation.decision, reason: result.evaluation.reason, key: result.evaluation.key }) };
       const last = evaluate(call, config(ctx), env(ctx), hardOverride);
       if (ctx.signal?.aborted || last.technical || last.key !== result.evaluation.key || last.fingerprint !== result.evaluation.fingerprint || last.decision !== result.evaluation.decision) throw new Error('Final revalidation failed');
