@@ -6,8 +6,12 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { defaults } from '../src/config.ts';
 import { atomicJSON } from '../src/storage.ts';
-const piRoot = process.env.PI_SMART_APPROVAL_TEST_PI_ROOT;
-test('installed Pi loader + mocked lifecycle integration (no tool execution, model requests or host configuration writes)', { skip: !piRoot }, async t => {
+import { findPiRoot, LOADER } from './pi-root.ts';
+const found = findPiRoot();
+const skip = found.root || found.error ? false : `no installed Pi found (set PI_SMART_APPROVAL_TEST_PI_ROOT to the pi-coding-agent package containing ${LOADER})`;
+test('installed Pi loader + mocked lifecycle integration (no tool execution, model requests or host configuration writes)', { skip }, async t => {
+  if (found.error) assert.fail(found.error);
+  const piRoot = found.root!; t.diagnostic(`Pi package (${found.source}): ${piRoot}`);
   const root = mkdtempSync(join(tmpdir(), 'approval-lifecycle-')); const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = join(root, 'agent');
   t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; rmSync(root, { recursive: true, force: true }); });

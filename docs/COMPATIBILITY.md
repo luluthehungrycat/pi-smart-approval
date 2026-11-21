@@ -53,7 +53,7 @@ LiquidAI/d1 availability/interface/suitability was **not verified** and no d1-sp
 
 ## Verification boundary
 
-`npm test` runs unit tests and mocked lifecycle checks. Lifecycle verification needs `PI_SMART_APPROVAL_TEST_PI_ROOT` to point at an installed `pi-coding-agent` package.
+`npm test` runs unit tests and mocked lifecycle checks. The lifecycle check auto-detects an installed `pi-coding-agent` package by read-only lookups (a `pi` on PATH linked into the package, Pi's managed installer, common global npm prefixes) and skips when none is found; `PI_SMART_APPROVAL_TEST_PI_ROOT` overrides detection and fails the test if it does not point at a valid package.
 
 `npm run e2e:rpc` runs a real `pi --mode rpc` process with a temporary `PI_CODING_AGENT_DIR`, an in-process scripted OpenAI-compatible model on `127.0.0.1`, and inert `touch` markers to demonstrate whether a tool ran. Its replies mimic T3 Code's adapter. Setting `T3_BRIDGE` to the path of T3's `pi-t3-mcp-extension.ts` also loads the real bridge extension.
 

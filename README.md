@@ -109,8 +109,12 @@ Only exact `Bash(command)` and `Read(path)` entries are translated; wildcards/ot
 
 ```sh
 npm test
-# Optional installed-Pi loader + mocked lifecycle integration:
+# The lifecycle test auto-detects an installed Pi (a `pi` on PATH linked into its npm package, Pi's
+# managed installer, or common global npm prefixes) and skips if none is found. Override explicitly:
 PI_SMART_APPROVAL_TEST_PI_ROOT=/absolute/path/to/node_modules/@earendil-works/pi-coding-agent npm test
+# Live harnesses (temporary agent dir, local scripted model, inert markers):
+npm run e2e:rpc
+npm run e2e:tui
 ```
 
 Tests execute no destructive payloads and no paid model requests. Shell attacks are strings evaluated by pure functions; filesystem tests use inert temporary fixtures only. `npm run e2e:rpc` and `npm run e2e:tui` exercise real Pi RPC/TUI processes using inert markers and scripted local model responses; see [the verification boundary](docs/COMPATIBILITY.md#verification-boundary) for scope and limitations.
